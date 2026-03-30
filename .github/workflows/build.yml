@@ -4,7 +4,7 @@ name: Build GDCubism GDExtension
 on:
     workflow_dispatch:
   
-  jobs:
+jobs:
     build-windows:
       # Abort if the repository is not private
       if: github.event.repository.private == true
