@@ -22,10 +22,8 @@ jobs:
             echo "::error::This workflow must only run in private repositories. Please make the repository private and rerun."
             exit 1
 
-        - name: Checkout Code and Submodules
+        - name: Checkout Template Repository
           uses: actions/checkout@v4
-          with:
-            submodules: recursive
 
         # Install Python toolchain required by the SCons build process
         - name: Setup Python Environment
@@ -45,6 +43,16 @@ jobs:
           with:
             arch: x64
 
+        # Acquire upstream plugin source along with required submodules (e.g., godot-cpp)
+        - name: Checkout Upstream GDCubism
+          uses: actions/checkout@v4
+          with:
+            repository: MizunagiKB/gd_cubism
+            ref: main
+            path: upstream
+            submodules: recursive
+            fetch-depth: 0
+
         - name: Deploy Live2D SDK to thirdparty
           shell: python
           run: |
@@ -54,13 +62,17 @@ jobs:
             import sys
 
             # The SDK folder or archive must be provided in the repository's SDK/ directory
-            
             sdk_root = Path("SDK")
             if not sdk_root.exists():
                 print("::error::SDK directory not found. Place the Cubism SDK archive or extracted folder inside the SDK/ directory before running this workflow.")
                 sys.exit(1)
 
-            thirdparty = Path("thirdparty")
+            upstream_root = Path("upstream")
+            if not upstream_root.exists():
+                print("::error::Upstream repository was not cloned. Ensure the checkout step succeeded.")
+                sys.exit(1)
+
+            thirdparty = upstream_root / "thirdparty"
             thirdparty.mkdir(exist_ok=True)
 
             def copy_sdk_directory(src_dir: Path) -> Path:
@@ -112,10 +124,12 @@ jobs:
 
         # Produce both Debug and Release binaries required by Godot
         - name: Build (Debug)
-          run: scons platform=windows arch=x86_64 target=template_debug
+          run: scons platform=windows arch=x86_64 target=template_debug -j4
+          working-directory: upstream
 
         - name: Build (Release)
-          run: scons platform=windows arch=x86_64 target=template_release
+          run: scons platform=windows arch=x86_64 target=template_release -j4
+          working-directory: upstream
 
         # Gather the generated DLLs so they can be downloaded as workflow artifacts
         - name: Collect Build Outputs
@@ -127,8 +141,8 @@ jobs:
             New-Item -ItemType Directory -Path $outputRoot | Out-Null
 
             $candidates = @(
-              "addons/gd_cubism/bin",
-              "demo/addons/gd_cubism/bin"
+              "upstream/addons/gd_cubism/bin",
+              "upstream/demo/addons/gd_cubism/bin"
             )
 
             $collected = $false
