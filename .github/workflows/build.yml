@@ -1,0 +1,146 @@
+# Windows-only automation for building the private GDCubism GDExtension
+name: Build GDCubism GDExtension
+
+on:
+    workflow_dispatch:
+  
+  jobs:
+    build-windows:
+      # Abort if the repository is not private
+      if: github.event.repository.private == true
+      runs-on: windows-latest
+      # Use PowerShell for all run steps on Windows
+      defaults:
+        run:
+          shell: pwsh
+
+      steps:
+        - name: Checkout Code and Submodules
+          uses: actions/checkout@v4
+          with:
+            submodules: recursive
+
+        # Install Python toolchain required by the SCons build process
+        - name: Setup Python Environment
+          uses: actions/setup-python@v5
+          with:
+            python-version: '3.10'
+
+        # Pin SCons to 4.7 to avoid known incompatibilities with newer releases
+        - name: Install Build Dependencies
+          run: |
+            python -m pip install --upgrade pip
+            python -m pip install scons==4.7
+
+        # Configure the Visual Studio compiler environment for SCons
+        - name: Setup MSVC Build Environment
+          uses: ilammy/msvc-dev-cmd@v1
+          with:
+            arch: x64
+
+        - name: Deploy Live2D SDK to thirdparty
+          shell: python
+          run: |
+            from pathlib import Path
+            import shutil
+            import zipfile
+            import sys
+
+            # The SDK folder or archive must be provided in the repository's SDK/ directory
+            
+            sdk_root = Path("SDK")
+            if not sdk_root.exists():
+                print("::error::SDK directory not found. Place the Cubism SDK archive or extracted folder inside the SDK/ directory before running this workflow.")
+                sys.exit(1)
+
+            thirdparty = Path("thirdparty")
+            thirdparty.mkdir(exist_ok=True)
+
+            def copy_sdk_directory(src_dir: Path) -> Path:
+                # Ensure the thirdparty directory contains a clean copy of the SDK
+                destination = thirdparty / src_dir.name
+                if destination.exists():
+                    shutil.rmtree(destination)
+                shutil.copytree(src_dir, destination)
+                return destination
+
+            candidate_dirs = sorted(
+                (p for p in sdk_root.iterdir() if p.is_dir() and p.name.startswith("CubismSdkForNative")),
+                key=lambda p: p.name.lower()
+            )
+            if candidate_dirs:
+                target_path = copy_sdk_directory(candidate_dirs[-1])
+            else:
+                zip_candidates = sorted(sdk_root.glob("CubismSdkForNative*.zip"), key=lambda p: p.name.lower())
+                if not zip_candidates:
+                    print("::error::No Cubism SDK folder or zip archive found inside SDK/. Expected items named CubismSdkForNative*.zip or directories with the same prefix.")
+                    sys.exit(1)
+
+                temp_dir = Path("temp_sdk_extract")
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                temp_dir.mkdir()
+
+                with zipfile.ZipFile(zip_candidates[-1], "r") as archive:
+                    archive.extractall(temp_dir)
+
+                extracted_dirs = sorted(
+                    (p for p in temp_dir.iterdir() if p.is_dir() and p.name.startswith("CubismSdkForNative")),
+                    key=lambda p: p.name.lower()
+                )
+                if not extracted_dirs:
+                    print("::error::The SDK archive does not contain a CubismSdkForNative directory at its root.")
+                    sys.exit(1)
+
+                target_path = copy_sdk_directory(extracted_dirs[-1])
+                shutil.rmtree(temp_dir)
+
+            required = ["Core", "Framework"]
+            missing = [sub for sub in required if not (target_path / sub).exists()]
+            if missing:
+                print(f"::error::The SDK at {target_path} is missing required subdirectories: {', '.join(missing)}.")
+                sys.exit(1)
+
+            print(f"SDK successfully deployed to {target_path}")
+
+        # Produce both Debug and Release binaries required by Godot
+        - name: Build (Debug)
+          run: scons platform=windows arch=x86_64 target=template_debug
+
+        - name: Build (Release)
+          run: scons platform=windows arch=x86_64 target=template_release
+
+        # Gather the generated DLLs so they can be downloaded as workflow artifacts
+        - name: Collect Build Outputs
+          run: |
+            $outputRoot = "build_output"
+            if (Test-Path $outputRoot) {
+              Remove-Item $outputRoot -Recurse -Force
+            }
+            New-Item -ItemType Directory -Path $outputRoot | Out-Null
+
+            $candidates = @(
+              "addons/gd_cubism/bin",
+              "demo/addons/gd_cubism/bin"
+            )
+
+            $collected = $false
+            foreach ($candidate in $candidates) {
+              if (Test-Path $candidate) {
+                Copy-Item -Path $candidate -Destination (Join-Path $outputRoot "bin") -Recurse -Force
+                $collected = $true
+                break
+              }
+            }
+
+            if (-not $collected) {
+              Write-Error "Compiled binaries were not found in addons/gd_cubism/bin or demo/addons/gd_cubism/bin."
+              exit 1
+            }
+
+        - name: Upload Windows Artifacts
+          uses: actions/upload-artifact@v4
+          with:
+            name: gdcubism-bin-windows-x86_64
+            path: build_output
+            retention-days: 7
