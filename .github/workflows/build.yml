@@ -1,5 +1,7 @@
-# Windows-only automation for building the private GDCubism GDExtension
 name: Build GDCubism GDExtension
+
+# Windows-only automation for building the private GDCubism GDExtension
+
 
 on:
     workflow_dispatch:
