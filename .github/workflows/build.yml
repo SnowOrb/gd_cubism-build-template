@@ -8,8 +8,6 @@ on:
   
 jobs:
     build-windows:
-      # Abort if the repository is not private
-      if: github.event.repository.private == true
       runs-on: windows-latest
       # Use PowerShell for all run steps on Windows
       defaults:
@@ -17,6 +15,13 @@ jobs:
           shell: pwsh
 
       steps:
+        # Hard stop when workflow runs in a public repository to respect Live2D EULA
+        - name: Validate Repository Visibility
+          if: github.event.repository.private != true
+          run: |
+            echo "::error::This workflow must only run in private repositories. Please make the repository private and rerun."
+            exit 1
+
         - name: Checkout Code and Submodules
           uses: actions/checkout@v4
           with:
